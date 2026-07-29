@@ -414,17 +414,41 @@ class RuntimeCoreCapabilityMixin:
             return {"success": False, "error": str(exc)}
 
     async def _cap_send_forward(self, plugin_id: str, capability: str, args: Dict[str, Any]) -> Any:
-        """向指定流发送转发消息。"""
+        """向指定流发送转发消息，并按需返回平台最终目标消息 ID。
 
-        del plugin_id, capability
+        默认结果保持原有 ``{"success": bool}`` 结构，供现有 SDK 归一化为
+        ``bool``。当 ``return_details=True`` 时，结果改用不含顶层
+        ``success`` 的 ``{"sent": bool, "message_id": str | None}``，使现有
+        SDK 原样保留详细结果。
+
+        Args:
+            plugin_id: 插件标识。
+            capability: 能力名称，固定为 ``send.forward``。
+            args: 转发节点、目标聊天流、发送选项及可选的
+                ``return_details``。
+
+        Returns:
+            默认模式返回包含 ``success`` 的旧版结果；详细模式返回发送状态和
+            平台最终目标消息 ID。参数错误、发送失败或平台没有返回最终 ID 时
+            不会返回虚假消息 ID。
+        """
+
+        del plugin_id
         from src.plugin_runtime.host.message_utils import PluginMessageUtils
         from src.services import send_service as send_api
 
         stream_id = str(args.get("stream_id", ""))
         messages = args.get("messages")
+        return_details = bool(args.get("return_details", False))
         sync_to_maisaka_history = bool(args.get("sync_to_maisaka_history", False))
         maisaka_source_kind = str(args.get("maisaka_source_kind", "plugin_send") or "plugin_send")
         if not isinstance(messages, list) or not messages or not stream_id:
+            if return_details:
+                return {
+                    "sent": False,
+                    "message_id": None,
+                    "error": "缺少必要参数 messages 或 stream_id",
+                }
             return {"success": False, "error": "缺少必要参数 messages 或 stream_id"}
 
         forward_nodes: List[Dict[str, Any]] = []
@@ -446,14 +470,20 @@ class RuntimeCoreCapabilityMixin:
             )
 
         if not forward_nodes:
+            if return_details:
+                return {
+                    "sent": False,
+                    "message_id": None,
+                    "error": "messages 中缺少有效的转发节点",
+                }
             return {"success": False, "error": "messages 中缺少有效的转发节点"}
 
         try:
             message_sequence = PluginMessageUtils._message_sequence_from_dict(
                 [{"type": "forward", "data": forward_nodes}]
             )
-            result = await send_api.custom_reply_set_to_stream(
-                reply_set=message_sequence,
+            sent_message = await send_api._send_to_target_with_message(
+                message_sequence=message_sequence,
                 stream_id=stream_id,
                 processed_plain_text=str(args.get("processed_plain_text", "[转发消息]")),
                 typing=bool(args.get("typing", False)),
@@ -462,9 +492,19 @@ class RuntimeCoreCapabilityMixin:
                 sync_to_maisaka_history=sync_to_maisaka_history,
                 maisaka_source_kind=maisaka_source_kind,
             )
-            return {"success": result}
+            if return_details:
+                message_id = str(sent_message.message_id or "").strip() if sent_message is not None else ""
+                if message_id.startswith("send_api_"):
+                    message_id = ""
+                return {
+                    "sent": sent_message is not None,
+                    "message_id": message_id or None,
+                }
+            return {"success": sent_message is not None}
         except Exception as exc:
-            logger.error(f"[cap.send.forward] 执行失败: {exc}", exc_info=True)
+            logger.error(f"[cap.{capability}] 执行失败: {exc}", exc_info=True)
+            if return_details:
+                return {"sent": False, "message_id": None, "error": str(exc)}
             return {"success": False, "error": str(exc)}
 
     async def _cap_send_command(self, plugin_id: str, capability: str, args: Dict[str, Any]) -> Any:
