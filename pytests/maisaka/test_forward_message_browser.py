@@ -26,14 +26,15 @@ def _forward_node(
     )
 
 
-def test_full_complex_message_returns_path_instead_of_expanding_nested_forward() -> None:
+def test_full_complex_message_expands_nested_forward() -> None:
     inner_forward = _forward_node("内层用户", "inner", TextComponent("内层正文"))
     outer_forward = _forward_node("外层用户", "outer", inner_forward)
 
     content = build_full_complex_message_content_from_sequence(MessageSequence([outer_forward]))
 
-    assert "【外层用户】: [嵌套转发消息，path=[0, 0]" in content
-    assert "内层正文" not in content
+    assert "【外层用户】: 【合并转发消息:" in content
+    assert "【内层用户】: 内层正文" in content
+    assert "path=" not in content
 
 
 def test_full_complex_message_expands_selected_nested_forward_one_level() -> None:
@@ -59,9 +60,9 @@ def test_full_complex_message_preserves_mixed_components_around_nested_forward()
 
     content = build_full_complex_message_content_from_sequence(MessageSequence([outer_forward]))
 
-    assert "【外层用户】: 转发前 [嵌套转发消息，path=[0, 0]" in content
+    assert "【外层用户】: 转发前 【合并转发消息:" in content
+    assert "【内层用户】: 内层正文" in content
     assert "转发后" in content
-    assert "内层正文" not in content
 
 
 def test_full_complex_message_keeps_adjacent_plain_components_inline() -> None:
